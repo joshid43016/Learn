@@ -278,3 +278,89 @@ USE ROLE junior_dba;
 
 ---
 
+/* *********************************************************************************** */
+/* This SQL file is for the Online live Hands On Lab for Snowpipe                      */
+/* *********************************************************************************** */
+
+--Set context
+USE ROLE sysadmin;
+CREATE OR REPLACE warehouse pipe_wh WITH warehouse_size = 'medium' warehouse_type = 'standard' auto_suspend = 120 auto_resume = True;
+USE warehouse pipe_wh;
+CREATE DATABASE IF NOT EXISTS citibike;
+USE Schema citibike.PUBLIC;
+
+--create trips table to load data from pipe
+CREATE OR REPLACE TABLE trips_stream 
+(tripduration INTEGER,
+  starttime TIMESTAMP,
+  stoptime TIMESTAMP,
+  start_station_id INTEGER,
+  end_station_id INTEGER,
+  bikeid INTEGER,
+  usertype string,
+  birth_year INTEGER,
+  gender INTEGER,
+  program_id INTEGER);
+
+--create weather table to load data from pipe
+CREATE OR REPLACE TABLE json_weather_stream (v variant);
+
+--create stage for trips
+CREATE OR REPLACE stage pipe_data_trips url = 's3://snowflake-workshop-lab/snowpipe/trips/' file_format=(TYPE=CSV);
+
+--create stage for weather
+CREATE OR REPLACE stage pipe_data_weather url = 's3://snowflake-workshop-lab/snowpipe/weather/' file_format=(TYPE=JSON);
+
+LIST @pipe_data_trips;
+LIST @pipe_data_weather;
+
+-- create the trips pipe using SNS topic
+CREATE OR REPLACE pipe trips_pipe auto_ingest=True 
+aws_sns_topic='arn:aws:sns:us-east-1:484577546576:snowpipe_sns_lab' 
+AS copy INTO trips_stream FROM @pipe_data_trips/;
+
+-- create the weather pipe using SNS topic
+CREATE OR REPLACE pipe weather_pipe auto_ingest=True 
+aws_sns_topic='arn:aws:sns:us-east-1:484577546576:snowpipe_sns_lab' 
+AS copy INTO json_weather_stream FROM @pipe_data_weather/;
+
+SHOW pipes;
+
+--check trips pipe status
+SELECT SYSTEM$pipe_status('trips_pipe');
+
+--check weather pipe status
+SELECT SYSTEM$pipe_status('weather_pipe');
+
+-- show the files that have been processed
+SELECT *
+FROM TABLE(information_schema.copy_history(Table_Name=>'TRIPS_STREAM', start_time=>dateadd('hour', -1, Current_Timestamp())));
+
+-- show the files that have been processed
+SELECT *
+FROM TABLE(information_schema.copy_history(Table_Name=>'JSON_WEATHER_STREAM', start_time=>dateadd('hour', -1, Current_Timestamp())));
+
+-- show the data landing in the table
+SELECT Count(*) FROM trips_stream;
+
+SELECT Count(*) FROM json_weather_stream;
+
+SELECT * FROM trips_stream LIMIT 5;
+
+SELECT * FROM json_weather_stream LIMIT 5;
+
+-- and we can unwrap complex structures such as arrays via FLATTEN
+-- to compare the most common weather in different cities
+SELECT VALUE:main::string AS conditions
+  ,Sum(iff(v:city.NAME::string='New York',1,0)) AS nyc_freq
+  ,Sum(iff(v:city.NAME::string='Seattle',1,0)) AS seattle_freq
+  ,Sum(iff(v:city.NAME::string='San Francisco',1,0)) AS san_fran_freq
+  ,Sum(iff(v:city.NAME::string='Miami',1,0)) AS miami_freq
+  ,Sum(iff(v:city.NAME::string='Washington, D. C.',1,0)) AS wash_freq
+  FROM json_weather_stream w,
+  lateral flatten (INPUT => w.v:weather) wf
+  WHERE v:city.NAME IN ('New York','Seattle','San Francisco','Miami','Washington, D. C.')
+    --and year(t) = 2019
+  GROUP BY 1;
+
+
