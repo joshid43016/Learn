@@ -1,0 +1,280 @@
+-- Snowsql extratc 
+copy into @~ from ino.dbc.dbgrants 
+file_format=(type=csv null_if = ('NULL', 'null')
+empty_field_as_null=false);
+
+-- 
+
+
+-- This SQL file is for the Hands On Lab Guide for the 30-day free Snowflake trial account
+-- The numbers below correspond to the sections of the Lab Guide in which SQL is to be run in a Snowflake worksheet
+-- Modules 1 and 2 of the Lab Guide have no SQL to execute
+
+
+/* *********************************************************************************** */
+/* *** MODULE 3  ********************************************************************* */
+/* *********************************************************************************** */
+
+-- 3.1.4
+
+CREATE TABLE trips 
+(tripduration INTEGER,
+  starttime TIMESTAMP,
+  stoptime TIMESTAMP,
+  start_station_id INTEGER,
+  start_station_name string,
+  start_station_latitude FLOAT,
+  start_station_longitude FLOAT,
+  end_station_id INTEGER,
+  end_station_name string,
+  end_station_latitude FLOAT,
+  end_station_longitude FLOAT,
+  bikeid INTEGER,
+  membership_type string,
+  usertype string,
+  birth_year INTEGER,
+  gender INTEGER);
+
+-- 3.2 
+
+CREATE OR REPLACE stage citibike_trips url = 's3://snowflake-workshop-lab/citibike-trips';
+
+-- 3.2.4
+
+LIST @citibike_trips;
+
+-- 3.3
+
+CREATE OR REPLACE FILE FORMAT CSV TYPE='csv'
+  compression = 'auto' field_delimiter = ',' record_delimiter = '\n'
+  skip_header = 0 field_optionally_enclosed_by = '\042' trim_space = False
+  error_on_column_count_mismatch = False ESCAPE = 'none' escape_unenclosed_field = '\134'
+  date_format = 'auto' timestamp_format = 'auto' null_if = ('');
+
+/* *********************************************************************************** */
+/* *** MODULE 4  ********************************************************************* */
+/* *********************************************************************************** */
+
+-- 4.2.2
+
+copy INTO trips FROM @citibike_trips file_format=CSV;
+
+-- 4.2.4
+
+truncate TABLE trips;
+
+-- 4.2.7
+
+copy INTO trips FROM @citibike_trips file_format=CSV;
+
+-- 4.3
+
+CREATE OR REPLACE warehouse analytics_wh WITH warehouse_size = 'large' warehouse_type = 'standard' 
+  auto_suspend = 600 auto_resume = True;
+
+/* *********************************************************************************** */
+/* *** MODULE 5  ********************************************************************* */
+/* *********************************************************************************** */
+
+-- 5.1.1
+
+USE ROLE sysadmin;
+USE warehouse analytics_wh;
+USE DATABASE citibike;
+USE Schema PUBLIC;
+
+-- 5.1.2
+
+SELECT * FROM trips LIMIT 20;
+
+-- 5.1.3
+
+SELECT date_trunc('hour', starttime) AS "date",
+Count(*) AS "num trips",
+Avg(tripduration)/60 AS "avg duration (mins)", 
+Avg(haversine(start_station_latitude, start_station_longitude, end_station_latitude, end_station_longitude)) AS "avg distance (km)" 
+FROM trips
+GROUP BY 1 ORDER BY 1;
+
+-- 5.1.4
+
+SELECT date_trunc('hour', starttime) AS "date",
+Count(*) AS "num trips",
+Avg(tripduration)/60 AS "avg duration (mins)", 
+Avg(haversine(start_station_latitude, start_station_longitude, end_station_latitude, end_station_longitude)) AS "avg distance (km)" 
+FROM trips
+GROUP BY 1 ORDER BY 1;
+
+-- 5.1.5
+
+SELECT monthname(starttime) AS "month",
+    Count(*) AS "num trips"
+FROM trips
+GROUP BY 1 ORDER BY 2 DESC;
+    
+
+-- 5.2.1
+
+CREATE TABLE trips_dev clone trips;
+
+/* *********************************************************************************** */
+/* *** MODULE 6  ********************************************************************* */
+/* *********************************************************************************** */
+
+-- 6.1.1
+
+CREATE DATABASE weather;
+
+-- 6.1.2
+
+USE ROLE sysadmin;
+USE warehouse compute_wh;
+USE DATABASE weather;
+USE Schema PUBLIC;
+
+-- 6.1.3
+
+CREATE TABLE json_weather_data (v variant);
+
+-- 6.2.1
+
+CREATE stage nyc_weather url = 's3://snowflake-workshop-lab/weather-nyc';
+
+-- 6.2.2 
+
+LIST @nyc_weather;
+
+-- 6.3.1
+
+copy INTO json_weather_data 
+FROM @nyc_weather 
+file_format = (TYPE=JSON);
+
+-- 6.3.2
+
+SELECT * FROM json_weather_data LIMIT 10;
+
+-- 6.4.1
+
+CREATE VIEW json_weather_data_view AS
+SELECT
+  v:TIME::TIMESTAMP AS observation_time,
+  v:city.id::INT AS city_id,
+  v:city.NAME::string AS city_name,
+  v:city.country::string AS country,
+  v:city.coord.lat::FLOAT AS city_lat,
+  v:city.coord.lon::FLOAT AS city_lon,
+  v:clouds.ALL::INT AS clouds,
+  (v:main.temp::FLOAT)-273.15 AS temp_avg,
+  (v:main.temp_min::FLOAT)-273.15 AS temp_min,
+  (v:main.temp_max::FLOAT)-273.15 AS temp_max,
+  v:weather[0].main::string AS weather,
+  v:weather[0].description::string AS weather_desc,
+  v:weather[0].icon::string AS weather_icon,
+  v:wind.deg::FLOAT AS wind_dir,
+  v:wind.speed::FLOAT AS wind_speed
+FROM json_weather_data
+WHERE city_id = 5128638;
+
+-- 6.4.4
+
+SELECT * FROM json_weather_data_view
+WHERE date_trunc('month',observation_time) = '2018-01-01' 
+LIMIT 20;
+
+-- 6.5.1
+
+SELECT weather AS conditions
+    ,Count(*) AS num_trips
+FROM citibike.PUBLIC.trips 
+LEFT OUTER JOIN json_weather_data_view
+    ON date_trunc('hour', observation_time) = date_trunc('hour', starttime)
+WHERE conditions IS NOT NULL
+GROUP BY 1 ORDER BY 2 DESC;
+
+
+/* *********************************************************************************** */
+/* *** MODULE 7  ********************************************************************* */
+/* *********************************************************************************** */
+
+-- 7.1.1
+
+DROP TABLE json_weather_data;
+
+-- 7.1.2
+
+SELECT * FROM json_weather_data LIMIT 10;
+
+-- 7.1.3
+
+undrop TABLE json_weather_data;
+
+-- 7.2.1
+
+USE DATABASE citibike;
+USE Schema PUBLIC;
+
+-- 7.2.2
+
+UPDATE trips SET start_station_name = 'oops';
+
+-- 7.2.3
+
+SELECT start_station_name AS station
+    ,Count(*) AS rides
+FROM trips
+GROUP BY 1
+ORDER BY 2 DESC
+LIMIT 20;
+
+
+-- 7.2.4
+
+SET query_id = 
+(SELECT query_id FROM 
+TABLE(information_schema.query_history_by_session (result_limit=>5)) 
+WHERE query_text LIKE 'update%' ORDER BY start_time LIMIT 1);
+
+-- 7.2.5
+CREATE OR REPLACE TABLE trips AS
+(SELECT * FROM trips BEFORE (STATEMENT => $query_id));
+        
+-- 7.2.6
+
+SELECT start_station_name AS "station"
+    ,Count(*) AS "rides"
+FROM trips
+GROUP BY 1
+ORDER BY 2 DESC
+LIMIT 20;
+
+
+/* *********************************************************************************** */
+/* *** MODULE 8  ********************************************************************* */
+/* *********************************************************************************** */
+
+-- 8.1.1
+
+USE ROLE accountadmin; 
+
+-- 8.1.3 (NOTE - enter your unique user name into the second row below)
+
+CREATE ROLE junior_dba;
+GRANT ROLE junior_dba TO USER jeremyp;--YOUR_USER_NAME_GOES HERE;
+
+-- 8.1.4
+
+USE ROLE junior_dba;
+
+-- 8.1.6
+
+USE ROLE accountadmin;
+GRANT usage ON DATABASE citibike TO ROLE junior_dba;
+GRANT usage ON DATABASE weather TO ROLE junior_dba;
+
+-- 8.1.7
+
+USE ROLE junior_dba;
+
+---
+
